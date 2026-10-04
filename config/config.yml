@@ -1,0 +1,21 @@
+data:
+  raw_path: "data/PS_20174392719_1491204439457_log.csv"
+
+features:
+  drop_columns:
+    [
+      "nameOrig",
+      "nameDest",
+      "newbalanceOrig",
+      "newbalanceDest",
+      "isFlaggedFraud",
+    ]
+  categorical: ["type"]
+
+model:
+  type: "xgboost"
+  random_state: 42
+  test_size: 0.2
+
+paths:
+  model_output: "trained_models/xgboost_fraud_model.pkl"
