@@ -1,10 +1,15 @@
+from pathlib import Path
+
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import pandas as pd
 
 from fraud_detection.model.predict import predict
 
 app = FastAPI(title="Fraud Detection API")
+
+STATIC_DIR = Path(__file__).parent / "static"
 
 
 class Transaction(BaseModel):
@@ -13,6 +18,11 @@ class Transaction(BaseModel):
     amount: float
     oldbalanceOrg: float
     oldbalanceDest: float
+
+
+@app.get("/")
+def index():
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.get("/health")
