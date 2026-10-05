@@ -8,7 +8,7 @@ def engineer_features(df):
     config = load_config()
     drop_cols = config["features"]["drop_columns"]
 
-    df = df.drop(columns=drop_cols)
+    df = df.drop(columns=drop_cols, errors="ignore")
     df["amount_to_balance_ratio"] = df["amount"] / (df["oldbalanceOrg"] + 1)
 
     logger.info(f"Features ready: {list(df.columns)}")
