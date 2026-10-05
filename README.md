@@ -1,84 +1,105 @@
 # Fraud Detection System
 
-End-to-end fraud detection on 6M+ synthetic mobile money transactions (PaySim dataset) — built to handle severe class imbalance and evaluated on metrics that actually reflect real-world fraud detection performance, not misleading accuracy.
+Detects fraudulent mobile-money transactions in 6.3M records (PaySim). The final XGBoost model catches **98% of fraud** with **64% precision** (PR-AUC 0.97), and runs as a modular Python pipeline behind a FastAPI service with a small web page for screening transactions.
 
-## Dataset
+## Demo
 
-[PaySim](https://www.kaggle.com/datasets/ealaxi/paysim1) — synthetic mobile money transaction logs generated from real transaction patterns from a mobile money service in Africa, created specifically for fraud detection research.
-
-- 6,362,620 transactions
-- 11 columns: `step`, `type`, `amount`, `nameOrig`, `oldbalanceOrg`, `newbalanceOrig`, `nameDest`, `oldbalanceDest`, `newbalanceDest`, `isFraud`, `isFlaggedFraud`
-
-## Key Findings
-
-### 1. Severe Class Imbalance
-```
-isFraud
-0    0.998709
-1    0.001291
-```
-Fraud accounts for only **0.129%** of transactions. This means **accuracy is not a valid metric** — a model predicting "not fraud" for every transaction would score 99.87% accuracy while catching zero fraud. This project evaluates on **Precision, Recall, F1, and PR-AUC** instead.
-
-### 2. Fraud Occurs in Only Two Transaction Types
-```
-type
-CASH_OUT    4116
-TRANSFER    4097
-```
-Fraud occurs **exclusively** in `TRANSFER` and `CASH_OUT` transactions — zero fraud in `PAYMENT`, `CASH_IN`, or `DEBIT`. This matches the real-world mobile money fraud pattern: funds are moved to another account (`TRANSFER`), then withdrawn as cash (`CASH_OUT`) before detection. `type` is a very strong feature.
-
-### 3. Fraudulent Transactions Are Significantly Larger
-
-| | count | mean | median | max |
-|---|---|---|---|---|
-| Not Fraud (0) | 6,354,407 | $178,197 | $74,685 | $92,445,517 |
-| Fraud (1) | 8,213 | $1,467,967 | $441,423 | $10,000,000 |
-
-Fraud transactions are **~6-8x larger** than legitimate ones, on average and at the median. *Note: fraud's max is suspiciously capped at exactly $10,000,000 — likely a simulator artifact, not expected in real-world data.*
-
-### 4. Disproportionate Financial Impact
-
-| Metric | Value |
+| Flagged as fraud | Looks legitimate |
 |---|---|
-| Total transaction volume | $1,144,392,944,759.77 |
-| Total fraud volume | $12,056,415,427.84 |
-| Fraud as % of total volume | **1.05%** |
-| Fraud as % of transaction count | 0.13% |
+| ![Flagged as fraud](docs/fraud.png) | ![Looks legitimate](docs/legit.png) |
 
-Fraud is only 0.13% of transactions by count but **1.05% of total transaction value** — roughly 8x disproportionate financial impact, confirming that fraudulent transactions skew large.
+The same $500,000 transfer is flagged when it empties the sender's account (99.99% fraud probability) and passes when it moves only half of the balance (0.29%).
 
-### 5. Data Leakage Warning
-`oldbalanceOrg`, `newbalanceOrig`, `oldbalanceDest`, `newbalanceDest` are **excluded from modeling**. Per the dataset documentation, transactions flagged as fraud are cancelled, so these post-transaction balance columns would directly leak the label into the features.
+## Results
 
-## Evaluation Approach
+Four approaches were compared on a stratified 80/20 split (1,272,524 test transactions, 1,643 of them fraud). Accuracy is not used, because a model that predicts "not fraud" every time already scores 99.87%.
 
-Given the extreme class imbalance, this project prioritizes:
-- **Recall** — catching actual fraud cases (missed fraud is costly)
-- **Precision** — minimizing false alarms
-- **PR-AUC** — more informative than ROC-AUC under severe imbalance
-- **Accuracy is explicitly not used as a success metric**
+| Model | Precision | Recall | F1 | PR-AUC |
+|---|---|---|---|---|
+| Logistic Regression | 0.01 | 0.83 | 0.02 | 0.038 |
+| LightGBM (default settings, not tuned) | 0.01 | 0.66 | 0.02 | 0.336 |
+| **XGBoost** | **0.64** | **0.98** | **0.77** | **0.968** |
 
-## Project Structure
+XGBoost confusion matrix on the test set:
+
+| | Predicted legitimate | Predicted fraud |
+|---|---|---|
+| **Actually legitimate** | 1,269,964 | 917 |
+| **Actually fraud** | 26 | 1,617 |
+
+Logistic Regression has a ROC-AUC of 0.94, which looks strong, but its PR-AUC of 0.038 and 132,946 false alarms show it is not usable. This is why PR-AUC is the main comparison metric here.
+
+## Key findings from the data
+
+- **Severe class imbalance.** Fraud is 0.129% of transactions.
+- **Fraud only happens in two transaction types.** `TRANSFER` (4,097 cases) and `CASH_OUT` (4,116 cases). There is none in `PAYMENT`, `CASH_IN` or `DEBIT`.
+- **Fraudulent transactions are larger.** Mean amount is about $1.47M against $178K for legitimate ones.
+- **Fraud punches above its weight in value.** It is 0.13% of transactions by count but 1.05% of total transaction value.
+- **Fraud usually empties the sender's account.** About 98% of fraud cases leave a zero balance, against about 57% of legitimate transactions.
+- **The built-in `isFlaggedFraud` rule catches almost nothing**, so it is not used as a feature.
+
+## Features and data leakage
+
+The model uses `step`, `type` (one-hot encoded), `amount`, `oldbalanceOrg`, `oldbalanceDest` and one engineered feature, `amount_to_balance_ratio` (amount divided by the sender's balance before the transaction).
+
+`newbalanceOrig` and `newbalanceDest` are deliberately excluded. Fraudulent transactions are cancelled, so these post-transaction balances reveal the label and would make the model look better than it is. Account IDs (`nameOrig`, `nameDest`) and `isFlaggedFraud` are also dropped.
+
+## Project structure
 
 ```
 fraud-detection-system/
-├── config/
-│   └── config.yml
-├── fraud_detection/
-│   ├── processing/
-│   │   ├── data_manager.py
-│   │   └── features.py
-│   ├── pipeline.py
-│   ├── train_pipeline.py
-│   └── predict.py
 ├── app/
-│   └── main.py
-├── notebooks/
-│   └── fraud_detection_eda.ipynb
-├── tests/
+│   ├── main.py                  # FastAPI service
+│   └── static/index.html        # screening web page
+├── config/config.yml            # paths, columns to drop, model settings
+├── fraud_detection/
+│   ├── data_processing/         # loader.py, features.py
+│   ├── model/                   # train.py, evaluate.py, predict.py
+│   ├── pipeline/pipeline.py     # load -> features -> train -> evaluate
+│   └── utils/                   # config.py, logger.py, exceptions.py
+├── notebooks/                   # EDA and modeling experiments
+├── trained_models/              # saved XGBoost pipeline
+├── docs/                        # screenshots
 └── requirements.txt
 ```
 
-## Status
+## Run it
 
-🚧 In progress — EDA complete, modeling in progress.
+1. Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+2. Download the [PaySim dataset](https://www.kaggle.com/datasets/ealaxi/paysim1) and place the CSV in `data/` (the file is not in the repo because of its size).
+
+3. Train and evaluate:
+
+```bash
+python -m fraud_detection.pipeline.pipeline
+```
+
+This saves the fitted model to `trained_models/xgboost_fraud_model.pkl`.
+
+4. Start the API and web page:
+
+```bash
+uvicorn app.main:app --reload
+```
+
+Open `http://127.0.0.1:8000/` for the screening page, or `http://127.0.0.1:8000/docs` for the API docs.
+
+Example request:
+
+```bash
+curl -X POST http://127.0.0.1:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"step": 1, "type": "TRANSFER", "amount": 500000, "oldbalanceOrg": 500000, "oldbalanceDest": 0}'
+```
+
+## Limitations
+
+- PaySim is synthetic. Some of what makes fraud easy to separate, such as fraud appearing only in transfers and cash-outs or the amount cap at exactly $10M, comes from the simulator and may not hold for real payment data.
+- Results come from a single train/test split, without cross-validation.
+- LightGBM was run with default settings. Its low score is mostly an under-tuned result, not a verdict on the method.
+- Unit tests are not written yet.
